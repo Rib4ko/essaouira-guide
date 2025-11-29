@@ -1,18 +1,19 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
-import { EventService } from "./mockSpreadsheet"; // We are reusing the file location but with the new class
+import { EventService } from "./mockSpreadsheet";
+import { Event } from "../types";
 
 const API_KEY = process.env.API_KEY || '';
 
-// Define the tools
+// --- Tool Definitions ---
 const searchLocalEventsTool: FunctionDeclaration = {
   name: 'searchLocalEvents',
-  description: 'Search the local Essaouira community spreadsheet/database for events. Use this when the user asks for "community", "local", or "spreadsheet" events, or if web search fails.',
+  description: 'Search the local Essaouira community database for events. Use this for "local", "community", "database" queries or when specific local info is needed.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       query: {
         type: Type.STRING,
-        description: 'Keywords to search for in the event database (e.g., "yoga", "music", "workshop").'
+        description: 'Keywords to search for (e.g., "music", "workshop", "yoga").'
       }
     },
     required: ['query']
@@ -21,7 +22,7 @@ const searchLocalEventsTool: FunctionDeclaration = {
 
 const addAttendeeTool: FunctionDeclaration = {
   name: 'addAttendee',
-  description: 'Add a person to the attendee list of a specific local event in the spreadsheet/database.',
+  description: 'Add a person to the attendee list of a specific local event in the database.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -38,13 +39,21 @@ const addAttendeeTool: FunctionDeclaration = {
   }
 };
 
+export interface ChatResponse {
+  text: string;
+  events: Event[];
+  webSources: string[];
+}
+
 export class GeminiService {
   private ai: GoogleGenAI;
   private chatSession: any;
 
   constructor() {
+    // Note: For local development without a bundler, you might need to hardcode the key here 
+    // if process.env is not available in your environment.
     if (!API_KEY) {
-      console.error("API_KEY is missing");
+      console.warn("Gemini API_KEY is missing. Please configure it in your environment.");
     }
     this.ai = new GoogleGenAI({ apiKey: API_KEY });
   }
@@ -52,45 +61,42 @@ export class GeminiService {
   async startChat() {
     const tools: Tool[] = [
       { functionDeclarations: [searchLocalEventsTool, addAttendeeTool] },
-      { googleSearch: {} } // Enable Google Search grounding
+      { googleSearch: {} }
     ];
 
     this.chatSession = this.ai.chats.create({
       model: 'gemini-2.5-flash',
       config: {
-        systemInstruction: `You are 'Mogador Guide', a warm and knowledgeable local guide for Essaouira, Morocco.
+        systemInstruction: `You are 'Mogador Guide', a warm, local guide for Essaouira, Morocco.
         
-        **Language Capabilities:**
-        - You speak **French**, **Moroccan Darija**, and **English** fluently.
-        - **IMPORTANT:** Always detect the language of the user's last message and respond in the SAME language.
-        - If the user speaks Darija, reply in Darija (using Latin script 'Arabizi' or Arabic script as appropriate, but Latin is preferred for casual chat unless they use Arabic script).
+        **Languages:**
+        - You speak **French**, **Moroccan Darija**, and **English**.
+        - **Rule:** Detect the user's language and reply in the SAME language.
         
-        Your capabilities:
-        1. Search the web for public events (concerts, festivals, weather) using Google Search.
-        2. Access a private 'local database' for community workshops and small gatherings using the 'searchLocalEvents' tool.
-        3. Register users for local events using the 'addAttendee' tool (you must have the user's name and event name).
+        **Capabilities:**
+        1. **Web Search:** For public events, weather, news.
+        2. **Local DB:** For community workshops/events (use 'searchLocalEvents').
+        3. **Registration:** Add users to events (use 'addAttendee').
 
-        Protocol:
-        - When asked for events, first try to answer with general knowledge or Google Search.
-        - If the user specifically mentions "local", "community", "database" (or French/Darija equivalents like "jdwel", "base de données") or if web results are sparse, check the local database using 'searchLocalEvents'.
-        - If you find local events, mention their Price and Contact info if available.
-        - If a user wants to join a local event, ask for their name (if not known) and use 'addAttendee'.
-        - Be polite, use Moroccan hospitality phrasing (e.g., "Marhba", "Allah ybarek fik") appropriate to the language context.
-        - Always format dates clearly.
+        **Behavior:**
+        - If finding local events, the system will show cards automatically. You should briefly summarize them in text.
+        - Be friendly and hospitable ("Marhba").
         `,
         tools: tools,
       }
     });
   }
 
-  async sendMessage(message: string, onToolStatusUpdate?: (status: string) => void) {
+  async sendMessage(message: string, onToolStatusUpdate?: (status: string) => void): Promise<ChatResponse> {
     if (!this.chatSession) await this.startChat();
+
+    // Track events found during this turn
+    let foundEvents: Event[] = [];
 
     // Send the user message
     let response = await this.chatSession.sendMessage({ message });
 
-    // Handle Function Calling Loop
-    // The model might decide to call a tool. We need to execute it and send the result back.
+    // Handle Tool Execution Loop
     while (response.functionCalls && response.functionCalls.length > 0) {
       const functionCalls = response.functionCalls;
       const responseParts = [];
@@ -100,10 +106,15 @@ export class GeminiService {
         let result: any;
 
         try {
-            if (onToolStatusUpdate) onToolStatusUpdate(`Checking ${name}...`);
+            if (onToolStatusUpdate) onToolStatusUpdate(`Executing: ${name}...`);
             
             if (name === 'searchLocalEvents') {
-                result = await EventService.searchEvents(args.query as string);
+                const events = await EventService.searchEvents(args.query as string);
+                result = events;
+                // Capture events to display in UI
+                if (Array.isArray(events)) {
+                  foundEvents = [...foundEvents, ...events];
+                }
             } else if (name === 'addAttendee') {
                 result = await EventService.addAttendee(args.eventName as string, args.personName as string);
             } else {
@@ -113,24 +124,39 @@ export class GeminiService {
             result = { error: e.message };
         }
 
-        // Construct the function response part
         responseParts.push({
           functionResponse: {
             name: name,
             response: { result: result },
-            id: id // Include the ID to ensure the model matches response to call
+            id: id
           } 
         });
       }
 
-      // Send the tool results back to the model
-      // We must use 'message' property with the array of parts
+      // Send tool outputs back to model
       response = await this.chatSession.sendMessage({
          message: responseParts
       });
     }
 
-    return response;
+    // Extract Text
+    const text = response.text || "";
+
+    // Extract Grounding (Web Sources)
+    const sources: string[] = [];
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+    if (groundingChunks) {
+      groundingChunks.forEach((chunk: any) => {
+          if (chunk.web?.uri) sources.push(chunk.web.uri);
+      });
+    }
+    const uniqueSources = [...new Set(sources)];
+
+    return {
+      text,
+      events: foundEvents,
+      webSources: uniqueSources
+    };
   }
 }
 

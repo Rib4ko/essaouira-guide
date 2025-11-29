@@ -47,28 +47,13 @@ const ChatInterface: React.FC = () => {
         setToolStatus(status);
       });
 
-      const text = response.text || "I found some information.";
-      
-      // Extract grounding metadata (sources)
-      let sources: string[] = [];
-      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-      if (groundingChunks) {
-        groundingChunks.forEach(chunk => {
-            if (chunk.web?.uri) {
-                sources.push(chunk.web.uri);
-            }
-        });
-      }
-      
-      // Remove duplicates
-      sources = [...new Set(sources)];
-
       const botMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'model',
-        text: text,
+        text: response.text,
         timestamp: Date.now(),
-        webSources: sources
+        webSources: response.webSources,
+        events: response.events // Pass structured events to UI
       };
 
       setMessages(prev => [...prev, botMsg]);
@@ -77,7 +62,7 @@ const ChatInterface: React.FC = () => {
       const errorMsg: Message = {
         id: Date.now().toString(),
         role: 'model',
-        text: "I apologize, I encountered an error accessing the information. Please check your API key or try again.",
+        text: "I apologize, I encountered an error accessing the information. Please check your network or API key.",
         isError: true,
         timestamp: Date.now()
       };
@@ -110,27 +95,27 @@ const ChatInterface: React.FC = () => {
         </div>
         <button 
             className="p-2 hover:bg-white/10 rounded-full transition-colors"
-            title="About"
-            onClick={() => alert("This agent connects to Google Search and a mock Google Spreadsheet service.")}
+            title="Project Info"
+            onClick={() => alert("Mogador Guide Project\n\nConnected to:\n- Google Search (Live)\n- Supabase Database (Events Table)\n\nTech: React, Gemini API, Supabase")}
         >
             <Info size={20} />
         </button>
       </header>
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-2 bg-[url('https://www.transparenttextures.com/patterns/arches.png')]">
+      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 bg-[url('https://www.transparenttextures.com/patterns/arches.png')]">
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
         {/* Loading Indicator */}
         {(loadingState !== LoadingState.IDLE) && (
-          <div className="flex justify-start w-full mb-6">
-             <div className="flex flex-col gap-2 items-start max-w-[75%]">
-                <div className="flex items-center gap-2 bg-white px-4 py-3 rounded-2xl rounded-bl-none shadow-sm border border-slate-100">
-                    <Loader2 className="w-4 h-4 text-teal-600 animate-spin" />
-                    <span className="text-slate-500 text-sm italic">
-                        {loadingState === LoadingState.EXECUTING_TOOL ? toolStatus : 'Exploring Essaouira...'}
+          <div className="flex justify-start w-full animate-fade-in">
+             <div className="flex flex-col gap-2 items-start max-w-[85%]">
+                <div className="flex items-center gap-3 bg-white px-5 py-3 rounded-2xl rounded-bl-none shadow-sm border border-slate-100">
+                    <Loader2 className="w-5 h-5 text-teal-600 animate-spin" />
+                    <span className="text-slate-500 text-sm font-medium">
+                        {loadingState === LoadingState.EXECUTING_TOOL ? toolStatus : 'Thinking...'}
                     </span>
                 </div>
              </div>
@@ -146,7 +131,7 @@ const ChatInterface: React.FC = () => {
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyPress}
-            placeholder="Ask about events, e.g., 'What's happening this weekend?'"
+            placeholder="Ask about events in Essaouira..."
             className="w-full bg-transparent border-none focus:ring-0 resize-none max-h-32 min-h-[44px] py-2.5 text-slate-700 placeholder-slate-400"
             rows={1}
             style={{ minHeight: '44px' }}
@@ -162,9 +147,6 @@ const ChatInterface: React.FC = () => {
             <Send size={20} />
           </button>
         </div>
-        <p className="text-center text-[10px] text-slate-400 mt-2">
-           Mogador Guide can check the web and local spreadsheets.
-        </p>
       </div>
     </div>
   );
