@@ -1,0 +1,5 @@
+{
+  "name": "Essaouira Event Guide AI",
+  "description": "An AI agent acting as a city guide for Essaouira, capable of searching web events and managing a local event spreadsheet.",
+  "requestFramePermissions": []
+}
